@@ -1,4 +1,4 @@
-# Secure Audio Exchange System
+# 🔐 Secure Audio Exchange System
 
 A complete cryptographic system for secure audio file exchange, implementing:
 - **Camellia-128** cipher (OFB mode) for symmetric encryption
@@ -9,7 +9,7 @@ Built from scratch without relying on high-level cryptographic libraries.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 python gui.py
@@ -19,7 +19,7 @@ This launches the graphical interface with Alice (sender) and Bob (receiver) pan
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 project/
@@ -31,17 +31,14 @@ project/
 │   ├── ecc.py             # Elliptic curve operations
 │   ├── schnorr.py         # Schnorr signatures
 │   └── utils.py           # Helper functions
-├── audio/                 # Audio file handling
-│   ├── __init__.py
-│   └── io_handler.py      # File I/O operations
-└── auth/                  # Authentication module
+└── audio/                 # Audio file handling
     ├── __init__.py
-    └── paper_auth.py      # Paper-based authentication
+    └── io_handler.py      # File I/O operations
 ```
 
 ---
 
-## File Descriptions
+## 📄 File Descriptions
 
 ### Main Files
 
@@ -67,27 +64,20 @@ project/
 | `io_handler.py` | **Audio File I/O**. Reads and writes binary audio files (MP3, WAV, FLAC, etc.). Includes format validation using magic bytes. |
 | `__init__.py` | Package initializer. Exports `AudioHandler`. |
 
-### auth/ - Authentication
-
-| File | Description |
-|------|-------------|
-| `paper_auth.py` | **Paper-based Authentication**. Implements authentication mechanisms. |
-| `__init__.py` | Package initializer. |
-
 ---
 
-## How It Works
+## 🔄 How It Works
 
-### Encryption Flow (Alice to Bob)
+### Encryption Flow (Alice → Bob)
 
 ```
 1. Alice generates ECDH key pair + Schnorr signing key pair
 2. Bob generates ECDH key pair
 3. Alice and Bob exchange public keys
 4. Alice:
-   - Derives session key: ECDH(Alice_private, Bob_public)
-   - Encrypts audio: Camellia-128-OFB(audio, session_key, IV)
-   - Signs ciphertext: Schnorr_Sign(hash(ciphertext), signing_key)
+   ├── Derives session key: ECDH(Alice_private, Bob_public)
+   ├── Encrypts audio: Camellia-128-OFB(audio, session_key, IV)
+   └── Signs ciphertext: Schnorr_Sign(hash(ciphertext), signing_key)
 5. Alice sends: ciphertext + IV + signature + public keys
 ```
 
@@ -96,15 +86,15 @@ project/
 ```
 1. Bob receives the encrypted package
 2. Bob:
-   - Verifies signature: Schnorr_Verify(signature, Alice_signing_public)
-   - Derives session key: ECDH(Bob_private, Alice_public)
-   - Decrypts: Camellia-128-OFB(ciphertext, session_key, IV)
+   ├── Verifies signature: Schnorr_Verify(signature, Alice_signing_public)
+   ├── Derives session key: ECDH(Bob_private, Alice_public)
+   └── Decrypts: Camellia-128-OFB(ciphertext, session_key, IV)
 3. Original audio file is recovered
 ```
 
 ---
 
-## Cryptographic Details
+## 🔐 Cryptographic Details
 
 ### Camellia-128 (OFB Mode)
 - 128-bit block cipher designed by Mitsubishi and NTT
@@ -123,7 +113,7 @@ project/
 
 ---
 
-## Output Files
+## 📦 Output Files
 
 When encrypting a file like `song.mp3`, the system creates:
 
@@ -134,7 +124,7 @@ When encrypting a file like `song.mp3`, the system creates:
 
 ---
 
-## GUI Features
+## 🖥️ GUI Features
 
 - **Split-panel design**: Alice (sender) on left, Bob (receiver) on right
 - **Key generation**: Separate buttons for ECDH and Schnorr keys
@@ -145,7 +135,7 @@ When encrypting a file like `song.mp3`, the system creates:
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 - Python 3.8+
 - tkinter (included with Python)
@@ -153,12 +143,12 @@ When encrypting a file like `song.mp3`, the system creates:
 
 ---
 
-## Authors
+## 👥 Authors
 
 Developed as part of an Information Security course project.
 
 ---
 
-## License
+## 📜 License
 
 Educational use only.

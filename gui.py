@@ -6,9 +6,6 @@ for demonstrating secure audio file encryption using:
 - Camellia-128 (OFB mode)
 - ECDH key exchange
 - Schnorr digital signatures
-
-Features dual-login gatekeeper: Both Alice and Bob must authenticate
-before accessing the encryption/decryption interface.
 """
 
 import tkinter as tk
@@ -19,11 +16,11 @@ import threading
 
 from secure_system import SecureSystem
 from crypto import ECPoint
-from auth import PaperAuth
+from auth.user_auth import UserAuth
 
 
 class SecureAudioGUI:
-    """Main GUI application for secure audio exchange with dual-login gatekeeper."""
+    """Main GUI application for secure audio exchange."""
     
     # Color scheme
     COLORS = {
@@ -34,9 +31,7 @@ class SecureAudioGUI:
         'accent_green': '#00d9a5',
         'text_light': '#eaeaea',
         'text_muted': '#8892a0',
-        'border': '#2a3f5f',
-        'warning': '#ffd93d',
-        'login_bg': '#0d1b2a'
+        'border': '#2a3f5f'
     }
     
     def __init__(self, root):
@@ -49,14 +44,12 @@ class SecureAudioGUI:
         # Initialize crypto system
         self.system = SecureSystem()
         
-        # Initialize authentication system
-        self.auth = PaperAuth()
-        
-        # Authentication state - CRITICAL for dual-lock gatekeeper
-        self.alice_logged_in = False
-        self.bob_logged_in = False
-        self.alice_session_active = False
-        self.bob_session_active = False
+        # User authentication
+        self.auth = UserAuth()
+        self.alice_authenticated = False
+        self.bob_authenticated = False
+        self.alice_username = None
+        self.bob_username = None
         
         # Key storage
         self.alice_ecdh_priv = None
@@ -71,29 +64,8 @@ class SecureAudioGUI:
         self.alice_audio_path = None
         self.bob_encrypted_path = None
         
-        # Panel references (for grid_remove/grid)
-        self.alice_login_panel = None
-        self.alice_main_panel = None
-        self.bob_login_panel = None
-        self.bob_main_panel = None
-        
         self._setup_styles()
         self._create_widgets()
-        
-        # Ensure default users exist for demo
-        self._ensure_default_users()
-    
-    def _ensure_default_users(self):
-        """Create default Alice and Bob users if they don't exist."""
-        try:
-            if not self.auth.user_exists('alice'):
-                result = self.auth.register_user('alice', 'alice_secret_paper')
-                print(f"Created Alice - Salt: {result['salt'][:16]}...")
-            if not self.auth.user_exists('bob'):
-                result = self.auth.register_user('bob', 'bob_secret_paper')
-                print(f"Created Bob - Salt: {result['salt'][:16]}...")
-        except Exception as e:
-            print(f"Note: {e}")
     
     def _setup_styles(self):
         """Configure ttk styles for modern look."""
@@ -122,15 +94,9 @@ class SecureAudioGUI:
                        foreground='black',
                        font=('Segoe UI', 11, 'bold'),
                        padding=(20, 12))
-        
-        style.configure('Login.TButton',
-                       background=self.COLORS['accent_green'],
-                       foreground='black',
-                       font=('Segoe UI', 10, 'bold'),
-                       padding=(10, 6))
     
     def _create_widgets(self):
-        """Create the main UI layout with dual-login gatekeeper."""
+        """Create the main UI layout."""
         # Header
         header = tk.Frame(self.root, bg=self.COLORS['bg_dark'])
         header.pack(fill='x', pady=(15, 10))
@@ -150,298 +116,80 @@ class SecureAudioGUI:
         subtitle.pack()
         
         # Main container with panels
-        self.container = tk.Frame(self.root, bg=self.COLORS['bg_dark'])
-        self.container.pack(fill='both', expand=True, padx=20, pady=10)
+        container = tk.Frame(self.root, bg=self.COLORS['bg_dark'])
+        container.pack(fill='both', expand=True, padx=20, pady=10)
         
         # Configure grid
-        self.container.columnconfigure(0, weight=1)
-        self.container.columnconfigure(1, weight=0)  # Arrow column
-        self.container.columnconfigure(2, weight=1)
-        self.container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=0)  # Arrow column
+        container.columnconfigure(2, weight=1)
+        container.rowconfigure(0, weight=1)
         
-        # Create ALL panels (both login and main for each user)
-        self._create_alice_login_panel(self.container)
-        self._create_alice_main_panel(self.container)
-        self._create_bob_login_panel(self.container)
-        self._create_bob_main_panel(self.container)
+        # Alice panel (left)
+        self._create_alice_panel(container)
         
         # Arrow in the middle
-        self.arrow_frame = tk.Frame(self.container, bg=self.COLORS['bg_dark'])
-        self.arrow_frame.grid(row=0, column=1, padx=10)
+        arrow_frame = tk.Frame(container, bg=self.COLORS['bg_dark'])
+        arrow_frame.grid(row=0, column=1, padx=10)
         
-        arrow_label = tk.Label(self.arrow_frame,
+        arrow_label = tk.Label(arrow_frame,
                               text="➡️\n📦\n🔒",
                               font=('Segoe UI', 24),
                               fg=self.COLORS['text_muted'],
                               bg=self.COLORS['bg_dark'])
         arrow_label.pack(pady=100)
         
-        # Hide main panels initially - CRITICAL for dual-lock gatekeeper
-        self.alice_main_panel.grid_remove()
-        self.bob_main_panel.grid_remove()
+        # Bob panel (right)
+        self._create_bob_panel(container)
         
         # Bottom status bar
         self._create_status_bar()
-        
-        # Initial status update
-        self._update_status()
     
-    # =========================================================================
-    # LOGIN PANELS
-    # =========================================================================
-    
-    def _create_alice_login_panel(self, parent):
-        """Create Alice's login panel."""
-        self.alice_login_panel = tk.Frame(parent, bg=self.COLORS['login_bg'], 
-                                          relief='flat', bd=2)
-        self.alice_login_panel.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+    def _create_alice_panel(self, parent):
+        panel = tk.Frame(parent, bg=self.COLORS['bg_panel'], relief='flat', bd=2)
+        panel.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         
         # Panel header
-        header = tk.Frame(self.alice_login_panel, bg=self.COLORS['accent_alice'])
+        header = tk.Frame(panel, bg=self.COLORS['accent_alice'])
         header.pack(fill='x')
         
         tk.Label(header,
-                text="👩 ALICE LOGIN",
-                font=('Segoe UI', 14, 'bold'),
-                fg='white',
-                bg=self.COLORS['accent_alice'],
-                pady=10).pack()
-        
-        # Content area
-        content = tk.Frame(self.alice_login_panel, bg=self.COLORS['login_bg'])
-        content.pack(fill='both', expand=True, padx=30, pady=30)
-        
-        # Login form centered
-        login_frame = tk.Frame(content, bg=self.COLORS['login_bg'])
-        login_frame.pack(expand=True)
-        
-        # Title
-        tk.Label(login_frame,
-                text="🔐 Authentication Required",
-                font=('Segoe UI', 16, 'bold'),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(pady=(0, 20))
-        
-        tk.Label(login_frame,
-                text="Enter your Paper (passphrase) and Salt to authenticate",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_muted'],
-                bg=self.COLORS['login_bg']).pack(pady=(0, 20))
-        
-        # Passphrase input
-        tk.Label(login_frame,
-                text="Paper (Passphrase):",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(anchor='w', pady=(10, 2))
-        
-        self.alice_passphrase_entry = tk.Entry(login_frame,
-                                               font=('Segoe UI', 11),
-                                               bg=self.COLORS['bg_panel'],
-                                               fg=self.COLORS['text_light'],
-                                               insertbackground='white',
-                                               show='●',
-                                               width=40)
-        self.alice_passphrase_entry.pack(fill='x', pady=(0, 10))
-        
-        # Salt input
-        tk.Label(login_frame,
-                text="Salt (from credentials.json):",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(anchor='w', pady=(10, 2))
-        
-        self.alice_salt_entry = tk.Entry(login_frame,
-                                         font=('Consolas', 10),
-                                         bg=self.COLORS['bg_panel'],
-                                         fg=self.COLORS['text_light'],
-                                         insertbackground='white',
-                                         width=40)
-        self.alice_salt_entry.pack(fill='x', pady=(0, 10))
-        
-        # Auto-fill salt button
-        autofill_btn = tk.Button(login_frame,
-                                text="📋 Auto-fill Salt from credentials.json",
-                                font=('Segoe UI', 9),
-                                bg=self.COLORS['border'],
-                                fg='white',
-                                activebackground='#3a5070',
-                                cursor='hand2',
-                                command=lambda: self._autofill_salt('alice'))
-        autofill_btn.pack(pady=(0, 20))
-        
-        # Login button
-        self.alice_login_btn = tk.Button(login_frame,
-                                        text="🔓 LOGIN",
-                                        font=('Segoe UI', 12, 'bold'),
-                                        bg=self.COLORS['accent_green'],
-                                        fg='black',
-                                        activebackground='#00ffcc',
-                                        cursor='hand2',
-                                        width=20,
-                                        command=self._alice_login)
-        self.alice_login_btn.pack(pady=10)
-        
-        # Login status
-        self.alice_login_status = tk.Label(login_frame,
-                                          text="",
-                                          font=('Segoe UI', 10),
-                                          fg=self.COLORS['text_muted'],
-                                          bg=self.COLORS['login_bg'])
-        self.alice_login_status.pack(pady=10)
-        
-        # Info note
-        tk.Label(login_frame,
-                text="PBKDF2-HMAC-SHA256 • 100,000 iterations",
-                font=('Segoe UI', 9),
-                fg=self.COLORS['text_muted'],
-                bg=self.COLORS['login_bg']).pack(pady=(20, 0))
-    
-    def _create_bob_login_panel(self, parent):
-        """Create Bob's login panel."""
-        self.bob_login_panel = tk.Frame(parent, bg=self.COLORS['login_bg'],
-                                        relief='flat', bd=2)
-        self.bob_login_panel.grid(row=0, column=2, sticky='nsew', padx=(5, 0))
-        
-        # Panel header
-        header = tk.Frame(self.bob_login_panel, bg=self.COLORS['accent_bob'])
-        header.pack(fill='x')
-        
-        tk.Label(header,
-                text="👨 BOB LOGIN",
-                font=('Segoe UI', 14, 'bold'),
-                fg='white',
-                bg=self.COLORS['accent_bob'],
-                pady=10).pack()
-        
-        # Content area
-        content = tk.Frame(self.bob_login_panel, bg=self.COLORS['login_bg'])
-        content.pack(fill='both', expand=True, padx=30, pady=30)
-        
-        # Login form centered
-        login_frame = tk.Frame(content, bg=self.COLORS['login_bg'])
-        login_frame.pack(expand=True)
-        
-        # Title
-        tk.Label(login_frame,
-                text="🔐 Authentication Required",
-                font=('Segoe UI', 16, 'bold'),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(pady=(0, 20))
-        
-        tk.Label(login_frame,
-                text="Enter your Paper (passphrase) and Salt to authenticate",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_muted'],
-                bg=self.COLORS['login_bg']).pack(pady=(0, 20))
-        
-        # Passphrase input
-        tk.Label(login_frame,
-                text="Paper (Passphrase):",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(anchor='w', pady=(10, 2))
-        
-        self.bob_passphrase_entry = tk.Entry(login_frame,
-                                             font=('Segoe UI', 11),
-                                             bg=self.COLORS['bg_panel'],
-                                             fg=self.COLORS['text_light'],
-                                             insertbackground='white',
-                                             show='●',
-                                             width=40)
-        self.bob_passphrase_entry.pack(fill='x', pady=(0, 10))
-        
-        # Salt input
-        tk.Label(login_frame,
-                text="Salt (from credentials.json):",
-                font=('Segoe UI', 10),
-                fg=self.COLORS['text_light'],
-                bg=self.COLORS['login_bg']).pack(anchor='w', pady=(10, 2))
-        
-        self.bob_salt_entry = tk.Entry(login_frame,
-                                       font=('Consolas', 10),
-                                       bg=self.COLORS['bg_panel'],
-                                       fg=self.COLORS['text_light'],
-                                       insertbackground='white',
-                                       width=40)
-        self.bob_salt_entry.pack(fill='x', pady=(0, 10))
-        
-        # Auto-fill salt button
-        autofill_btn = tk.Button(login_frame,
-                                text="📋 Auto-fill Salt from credentials.json",
-                                font=('Segoe UI', 9),
-                                bg=self.COLORS['border'],
-                                fg='white',
-                                activebackground='#3a5070',
-                                cursor='hand2',
-                                command=lambda: self._autofill_salt('bob'))
-        autofill_btn.pack(pady=(0, 20))
-        
-        # Login button
-        self.bob_login_btn = tk.Button(login_frame,
-                                      text="🔓 LOGIN",
-                                      font=('Segoe UI', 12, 'bold'),
-                                      bg=self.COLORS['accent_green'],
-                                      fg='black',
-                                      activebackground='#00ffcc',
-                                      cursor='hand2',
-                                      width=20,
-                                      command=self._bob_login)
-        self.bob_login_btn.pack(pady=10)
-        
-        # Login status
-        self.bob_login_status = tk.Label(login_frame,
-                                        text="",
-                                        font=('Segoe UI', 10),
-                                        fg=self.COLORS['text_muted'],
-                                        bg=self.COLORS['login_bg'])
-        self.bob_login_status.pack(pady=10)
-        
-        # Info note
-        tk.Label(login_frame,
-                text="PBKDF2-HMAC-SHA256 • 100,000 iterations",
-                font=('Segoe UI', 9),
-                fg=self.COLORS['text_muted'],
-                bg=self.COLORS['login_bg']).pack(pady=(20, 0))
-    
-    # =========================================================================
-    # MAIN PANELS (Hidden until dual auth)
-    # =========================================================================
-    
-    def _create_alice_main_panel(self, parent):
-        """Create Alice's encryption panel (hidden initially)."""
-        self.alice_main_panel = tk.Frame(parent, bg=self.COLORS['bg_panel'], 
-                                         relief='flat', bd=2)
-        self.alice_main_panel.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
-        
-        # Panel header
-        header = tk.Frame(self.alice_main_panel, bg=self.COLORS['accent_alice'])
-        header.pack(fill='x')
-        
-        header_content = tk.Frame(header, bg=self.COLORS['accent_alice'])
-        header_content.pack(fill='x', padx=10)
-        
-        tk.Label(header_content,
                 text="👩 ALICE (Sender)",
                 font=('Segoe UI', 14, 'bold'),
                 fg='white',
                 bg=self.COLORS['accent_alice'],
-                pady=10).pack(side='left')
-        
-        # Logout button
-        self.alice_logout_btn = tk.Button(header_content,
-                                         text="🚪 Logout",
-                                         font=('Segoe UI', 9),
-                                         bg='#8b0000',
-                                         fg='white',
-                                         activebackground='#a52a2a',
-                                         cursor='hand2',
-                                         command=self._alice_logout)
-        self.alice_logout_btn.pack(side='right', pady=5)
+                pady=10).pack()
         
         # Content area
-        content = tk.Frame(self.alice_main_panel, bg=self.COLORS['bg_panel'])
+        content = tk.Frame(panel, bg=self.COLORS['bg_panel'])
         content.pack(fill='both', expand=True, padx=15, pady=15)
+        
+        # --- Embedded Login Section ---
+        self._create_section(content, "Login")
+        
+        login_frame = tk.Frame(content, bg=self.COLORS['bg_panel'])
+        login_frame.pack(fill='x', pady=(0, 10))
+        
+        tk.Label(login_frame, text="Username:", bg=self.COLORS['bg_panel'], fg=self.COLORS['text_light']).grid(row=0, column=0, sticky='w')
+        self.alice_login_username = tk.Entry(login_frame)
+        self.alice_login_username.grid(row=0, column=1, padx=5)
+        
+        tk.Label(login_frame, text="Password:", bg=self.COLORS['bg_panel'], fg=self.COLORS['text_light']).grid(row=1, column=0, sticky='w')
+        self.alice_login_password = tk.Entry(login_frame, show='*')
+        self.alice_login_password.grid(row=1, column=1, padx=5)
+        
+        self.alice_login_btn = tk.Button(login_frame,
+                                         text="Login",
+                                         bg=self.COLORS['accent_alice'],
+                                         fg='white',
+                                         command=self._alice_login)
+        self.alice_login_btn.grid(row=2, column=0, columnspan=2, pady=4)
+        
+        self.alice_login_status = tk.Label(login_frame,
+                                          text="",
+                                          bg=self.COLORS['bg_panel'],
+                                          fg='red')
+        self.alice_login_status.grid(row=3, column=0, columnspan=2)
         
         # Step 1: Generate Keys
         self._create_section(content, "Step 1: Generate Keys")
@@ -456,7 +204,6 @@ class SecureAudioGUI:
                                          fg='white',
                                          activebackground='#ff6b6b',
                                          cursor='hand2',
-                                         state='disabled',  # Disabled until dual auth
                                          command=self._alice_generate_keys)
         self.alice_keygen_btn.pack(fill='x', pady=5)
         
@@ -532,40 +279,51 @@ class SecureAudioGUI:
                                 state='disabled')
         self.alice_log.pack(fill='both', expand=True)
     
-    def _create_bob_main_panel(self, parent):
-        """Create Bob's decryption panel (hidden initially)."""
-        self.bob_main_panel = tk.Frame(parent, bg=self.COLORS['bg_panel'],
-                                       relief='flat', bd=2)
-        self.bob_main_panel.grid(row=0, column=2, sticky='nsew', padx=(5, 0))
+    def _create_bob_panel(self, parent):
+        panel = tk.Frame(parent, bg=self.COLORS['bg_panel'], relief='flat', bd=2)
+        panel.grid(row=0, column=2, sticky='nsew', padx=(5, 0))
         
         # Panel header
-        header = tk.Frame(self.bob_main_panel, bg=self.COLORS['accent_bob'])
+        header = tk.Frame(panel, bg=self.COLORS['accent_bob'])
         header.pack(fill='x')
         
-        header_content = tk.Frame(header, bg=self.COLORS['accent_bob'])
-        header_content.pack(fill='x', padx=10)
-        
-        tk.Label(header_content,
+        tk.Label(header,
                 text="👨 BOB (Receiver)",
                 font=('Segoe UI', 14, 'bold'),
                 fg='white',
                 bg=self.COLORS['accent_bob'],
-                pady=10).pack(side='left')
-        
-        # Logout button
-        self.bob_logout_btn = tk.Button(header_content,
-                                       text="🚪 Logout",
-                                       font=('Segoe UI', 9),
-                                       bg='#8b0000',
-                                       fg='white',
-                                       activebackground='#a52a2a',
-                                       cursor='hand2',
-                                       command=self._bob_logout)
-        self.bob_logout_btn.pack(side='right', pady=5)
+                pady=10).pack()
         
         # Content area
-        content = tk.Frame(self.bob_main_panel, bg=self.COLORS['bg_panel'])
+        content = tk.Frame(panel, bg=self.COLORS['bg_panel'])
         content.pack(fill='both', expand=True, padx=15, pady=15)
+        
+        # --- Embedded Login Section ---
+        self._create_section(content, "Login")
+        
+        login_frame = tk.Frame(content, bg=self.COLORS['bg_panel'])
+        login_frame.pack(fill='x', pady=(0, 10))
+        
+        tk.Label(login_frame, text="Username:", bg=self.COLORS['bg_panel'], fg=self.COLORS['text_light']).grid(row=0, column=0, sticky='w')
+        self.bob_login_username = tk.Entry(login_frame)
+        self.bob_login_username.grid(row=0, column=1, padx=5)
+        
+        tk.Label(login_frame, text="Password:", bg=self.COLORS['bg_panel'], fg=self.COLORS['text_light']).grid(row=1, column=0, sticky='w')
+        self.bob_login_password = tk.Entry(login_frame, show='*')
+        self.bob_login_password.grid(row=1, column=1, padx=5)
+        
+        self.bob_login_btn = tk.Button(login_frame,
+                                       text="Login",
+                                       bg=self.COLORS['accent_bob'],
+                                       fg='white',
+                                       command=self._bob_login)
+        self.bob_login_btn.grid(row=2, column=0, columnspan=2, pady=4)
+        
+        self.bob_login_status = tk.Label(login_frame,
+                                        text="",
+                                        bg=self.COLORS['bg_panel'],
+                                        fg='red')
+        self.bob_login_status.grid(row=3, column=0, columnspan=2)
         
         # Step 1: Generate Keys
         self._create_section(content, "Step 1: Generate Keys")
@@ -580,7 +338,6 @@ class SecureAudioGUI:
                                        fg='white',
                                        activebackground='#1a5276',
                                        cursor='hand2',
-                                       state='disabled',  # Disabled until dual auth
                                        command=self._bob_generate_keys)
         self.bob_keygen_btn.pack(fill='x', pady=5)
         
@@ -663,256 +420,50 @@ class SecureAudioGUI:
         status_bar.pack(fill='x', pady=10, padx=20)
         
         self.status_label = tk.Label(status_bar,
-                                    text="🔒 Both Alice and Bob must login to proceed",
+                                    text="Ready - Generate keys for both Alice and Bob to begin",
                                     font=('Segoe UI', 10),
-                                    fg=self.COLORS['warning'],
+                                    fg=self.COLORS['text_muted'],
                                     bg=self.COLORS['bg_dark'])
         self.status_label.pack(side='left')
         
         # Demo button
-        self.demo_btn = tk.Button(status_bar,
-                                 text="🚀 Run Full Demo",
-                                 font=('Segoe UI', 10, 'bold'),
-                                 bg=self.COLORS['accent_green'],
-                                 fg='black',
-                                 activebackground='#00ffcc',
-                                 cursor='hand2',
-                                 state='disabled',  # Disabled until dual auth
-                                 command=self._run_demo)
-        self.demo_btn.pack(side='right')
-    
-    # =========================================================================
-    # AUTHENTICATION METHODS
-    # =========================================================================
-    
-    def _autofill_salt(self, user: str):
-        """Auto-fill salt from credentials.json."""
-        try:
-            salt = self.auth.get_user_salt(user)
-            if user == 'alice':
-                self.alice_salt_entry.delete(0, tk.END)
-                self.alice_salt_entry.insert(0, salt)
-            else:
-                self.bob_salt_entry.delete(0, tk.END)
-                self.bob_salt_entry.insert(0, salt)
-        except ValueError as e:
-            messagebox.showerror("Error", str(e))
-    
-    def _alice_login(self):
-        """Handle Alice's login attempt."""
-        passphrase = self.alice_passphrase_entry.get()
-        salt = self.alice_salt_entry.get()
-        
-        if not passphrase or not salt:
-            self.alice_login_status.config(
-                text="❌ Please enter both passphrase and salt",
-                fg='#ff6b6b'
-            )
-            return
-        
-        # Authenticate using PaperAuth with PBKDF2-HMAC-SHA256
-        if self.auth.authenticate('alice', passphrase, salt):
-            self.alice_logged_in = True
-            self.alice_session_active = True
-            
-            self.alice_login_status.config(
-                text="✅ Authentication successful!",
-                fg=self.COLORS['accent_green']
-            )
-            
-            # Clear sensitive data from entry
-            self.alice_passphrase_entry.delete(0, tk.END)
-            
-            # Check if both users are authenticated
-            self._check_dual_authentication()
-        else:
-            self.alice_login_status.config(
-                text="❌ Authentication failed! Invalid passphrase or salt",
-                fg='#ff6b6b'
-            )
-    
-    def _bob_login(self):
-        """Handle Bob's login attempt."""
-        passphrase = self.bob_passphrase_entry.get()
-        salt = self.bob_salt_entry.get()
-        
-        if not passphrase or not salt:
-            self.bob_login_status.config(
-                text="❌ Please enter both passphrase and salt",
-                fg='#ff6b6b'
-            )
-            return
-        
-        # Authenticate using PaperAuth with PBKDF2-HMAC-SHA256
-        if self.auth.authenticate('bob', passphrase, salt):
-            self.bob_logged_in = True
-            self.bob_session_active = True
-            
-            self.bob_login_status.config(
-                text="✅ Authentication successful!",
-                fg=self.COLORS['accent_green']
-            )
-            
-            # Clear sensitive data from entry
-            self.bob_passphrase_entry.delete(0, tk.END)
-            
-            # Check if both users are authenticated
-            self._check_dual_authentication()
-        else:
-            self.bob_login_status.config(
-                text="❌ Authentication failed! Invalid passphrase or salt",
-                fg='#ff6b6b'
-            )
-    
-    def _check_dual_authentication(self):
-        """
-        CRITICAL: Check if both Alice and Bob are authenticated.
-        Only reveal main panels when BOTH are logged in.
-        """
-        # Update status to reflect current authentication state
-        self._update_status()
-        
-        # DUAL-LOCK TRIGGER: Only proceed when BOTH are authenticated
-        if self.alice_logged_in and self.bob_logged_in:
-            # Both authenticated - reveal main panels
-            self._reveal_main_interface()
-        elif self.alice_logged_in:
-            # Only Alice logged in
-            self.alice_login_status.config(
-                text="✅ Logged in. Waiting for Bob...",
-                fg=self.COLORS['accent_green']
-            )
-        elif self.bob_logged_in:
-            # Only Bob logged in
-            self.bob_login_status.config(
-                text="✅ Logged in. Waiting for Alice...",
-                fg=self.COLORS['accent_green']
-            )
-    
-    def _reveal_main_interface(self):
-        """Reveal the main encryption/decryption interface."""
-        # Hide login panels
-        self.alice_login_panel.grid_remove()
-        self.bob_login_panel.grid_remove()
-        
-        # Show main panels
-        self.alice_main_panel.grid()
-        self.bob_main_panel.grid()
-        
-        # Enable key generation buttons (security persistence check)
-        self._verify_session_and_enable_controls()
-        
-        # Log the successful dual authentication
-        self._log_alice("=" * 40)
-        self._log_alice("✅ Dual authentication complete!")
-        self._log_alice("Session established for Alice")
-        self._log_alice("=" * 40)
-        
-        self._log_bob("=" * 40)
-        self._log_bob("✅ Dual authentication complete!")
-        self._log_bob("Session established for Bob")
-        self._log_bob("=" * 40)
-    
-    def _verify_session_and_enable_controls(self):
-        """
-        Security Persistence: Verify both sessions are active
-        before enabling controls.
-        """
-        if self.alice_session_active and self.bob_session_active:
-            # Enable key generation buttons
-            self.alice_keygen_btn.config(state='normal')
-            self.bob_keygen_btn.config(state='normal')
-            self.demo_btn.config(state='normal')
-        else:
-            # Keep buttons disabled if session not verified
-            self.alice_keygen_btn.config(state='disabled')
-            self.bob_keygen_btn.config(state='disabled')
-            self.demo_btn.config(state='disabled')
-    
-    def _alice_logout(self):
-        """Handle Alice's logout."""
-        self.alice_logged_in = False
-        self.alice_session_active = False
-        
-        # Reset keys
-        self.alice_ecdh_priv = None
-        self.alice_ecdh_pub = None
-        self.alice_sign_priv = None
-        self.alice_sign_pub = None
-        self.alice_audio_path = None
-        
-        # Hide main interface, show login
-        self._hide_main_interface()
-        
-        # Reset login panel
-        self.alice_login_status.config(text="", fg=self.COLORS['text_muted'])
-        self.alice_passphrase_entry.delete(0, tk.END)
-        
-        self._update_status()
-    
-    def _bob_logout(self):
-        """Handle Bob's logout."""
-        self.bob_logged_in = False
-        self.bob_session_active = False
-        
-        # Reset keys
-        self.bob_ecdh_priv = None
-        self.bob_ecdh_pub = None
-        self.bob_encrypted_path = None
-        
-        # Hide main interface, show login
-        self._hide_main_interface()
-        
-        # Reset login panel
-        self.bob_login_status.config(text="", fg=self.COLORS['text_muted'])
-        self.bob_passphrase_entry.delete(0, tk.END)
-        
-        self._update_status()
-    
-    def _hide_main_interface(self):
-        """Hide main panels and show login panels."""
-        # Hide main panels
-        self.alice_main_panel.grid_remove()
-        self.bob_main_panel.grid_remove()
-        
-        # Show login panels
-        self.alice_login_panel.grid()
-        self.bob_login_panel.grid()
-        
-        # Disable controls
-        self.alice_keygen_btn.config(state='disabled')
-        self.bob_keygen_btn.config(state='disabled')
-        self.alice_encrypt_btn.config(state='disabled')
-        self.bob_decrypt_btn.config(state='disabled')
-        self.demo_btn.config(state='disabled')
-        
-        # Reset key status labels
-        self.alice_key_status.config(
-            text="⏳ Keys not generated",
-            fg=self.COLORS['text_muted']
-        )
-        self.bob_key_status.config(
-            text="⏳ Keys not generated",
-            fg=self.COLORS['text_muted']
-        )
-        self.alice_bob_key_status.config(
-            text="⚠️ Need Bob's public key first",
-            fg='#ffd93d'
-        )
+        demo_btn = tk.Button(status_bar,
+                            text="🚀 Run Full Demo",
+                            font=('Segoe UI', 10, 'bold'),
+                            bg=self.COLORS['accent_green'],
+                            fg='black',
+                            activebackground='#00ffcc',
+                            cursor='hand2',
+                            command=self._run_demo)
+        demo_btn.pack(side='right')
     
     # =========================================================================
     # ALICE'S ACTIONS
     # =========================================================================
     
+    def _alice_login(self):
+        username = self.alice_login_username.get()
+        password = self.alice_login_password.get()
+        if self.auth.authenticate(username, password):
+            self.alice_authenticated = True
+            self.alice_username = username
+            self.alice_login_status.config(text=f"Authenticated as {username} ✔", fg=self.COLORS['accent_green'])
+            self.alice_keygen_btn.config(state='normal')
+            self.alice_file_btn.config(state='normal')
+            self.alice_encrypt_btn.config(state='normal')
+        else:
+            self.alice_login_status.config(text="Login failed.", fg='red')
+            self.alice_authenticated = False
+            self.alice_keygen_btn.config(state='disabled')
+            self.alice_file_btn.config(state='disabled')
+            self.alice_encrypt_btn.config(state='disabled')
+    
     def _alice_generate_keys(self):
-        """Generate Alice's key pairs."""
-        # Security check: Verify session is active
-        if not self.alice_session_active or not self.bob_session_active:
-            messagebox.showerror("Security Error", 
-                "Session verification failed. Please re-authenticate.")
-            self._hide_main_interface()
+        if not self.alice_authenticated:
+            messagebox.showerror("Authentication Required", "Alice must log in first.")
             return
         
+        """Generate Alice's key pairs."""
         self._log_alice("Generating ECDH key pair...")
         self.alice_ecdh_priv, self.alice_ecdh_pub = self.system.generate_ecdh_keypair()
         
@@ -955,14 +506,11 @@ class SecureAudioGUI:
             self._update_encrypt_button_state()
     
     def _alice_encrypt(self):
-        """Encrypt the selected audio file."""
-        # Security check: Verify session is active
-        if not self.alice_session_active or not self.bob_session_active:
-            messagebox.showerror("Security Error", 
-                "Session verification failed. Please re-authenticate.")
-            self._hide_main_interface()
+        if not self.alice_authenticated:
+            messagebox.showerror("Authentication Required", "Alice must log in first.")
             return
         
+        """Encrypt the selected audio file."""
         if not all([self.alice_ecdh_priv, self.alice_sign_priv, 
                    self.bob_ecdh_pub, self.alice_audio_path]):
             messagebox.showerror("Error", "Missing keys or file!")
@@ -1016,15 +564,29 @@ class SecureAudioGUI:
     # BOB'S ACTIONS
     # =========================================================================
     
+    def _bob_login(self):
+        username = self.bob_login_username.get()
+        password = self.bob_login_password.get()
+        if self.auth.authenticate(username, password):
+            self.bob_authenticated = True
+            self.bob_username = username
+            self.bob_login_status.config(text=f"Authenticated as {username} ✔", fg=self.COLORS['accent_green'])
+            self.bob_keygen_btn.config(state='normal')
+            self.bob_file_btn.config(state='normal')
+            self.bob_decrypt_btn.config(state='normal')
+        else:
+            self.bob_login_status.config(text="Login failed.", fg='red')
+            self.bob_authenticated = False
+            self.bob_keygen_btn.config(state='disabled')
+            self.bob_file_btn.config(state='disabled')
+            self.bob_decrypt_btn.config(state='disabled')
+
     def _bob_generate_keys(self):
-        """Generate Bob's key pair."""
-        # Security check: Verify session is active
-        if not self.alice_session_active or not self.bob_session_active:
-            messagebox.showerror("Security Error", 
-                "Session verification failed. Please re-authenticate.")
-            self._hide_main_interface()
+        if not self.bob_authenticated:
+            messagebox.showerror("Authentication Required", "Bob must log in first.")
             return
         
+        """Generate Bob's key pair."""
         self._log_bob("Generating ECDH key pair...")
         self.bob_ecdh_priv, self.bob_ecdh_pub = self.system.generate_ecdh_keypair()
         
@@ -1077,14 +639,11 @@ class SecureAudioGUI:
             self._update_decrypt_button_state()
     
     def _bob_decrypt(self):
-        """Decrypt the selected file."""
-        # Security check: Verify session is active
-        if not self.alice_session_active or not self.bob_session_active:
-            messagebox.showerror("Security Error", 
-                "Session verification failed. Please re-authenticate.")
-            self._hide_main_interface()
+        if not self.bob_authenticated:
+            messagebox.showerror("Authentication Required", "Bob must log in first.")
             return
         
+        """Decrypt the selected file."""
         if not all([self.bob_ecdh_priv, self.bob_encrypted_path, 
                    self.alice_sign_pub]):
             messagebox.showerror("Error", "Missing keys or file!")
@@ -1150,12 +709,7 @@ class SecureAudioGUI:
         self.bob_log.config(state='disabled')
     
     def _update_encrypt_button_state(self):
-        """Update encrypt button based on prerequisites and session."""
-        # Security persistence: Check session is active
-        if not (self.alice_session_active and self.bob_session_active):
-            self.alice_encrypt_btn.config(state='disabled')
-            return
-        
+        """Update encrypt button based on prerequisites."""
         if all([self.alice_ecdh_priv, self.alice_sign_priv,
                self.bob_ecdh_pub, self.alice_audio_path]):
             self.alice_encrypt_btn.config(state='normal')
@@ -1163,12 +717,7 @@ class SecureAudioGUI:
             self.alice_encrypt_btn.config(state='disabled')
     
     def _update_decrypt_button_state(self):
-        """Update decrypt button based on prerequisites and session."""
-        # Security persistence: Check session is active
-        if not (self.alice_session_active and self.bob_session_active):
-            self.bob_decrypt_btn.config(state='disabled')
-            return
-        
+        """Update decrypt button based on prerequisites."""
         if all([self.bob_ecdh_priv, self.bob_encrypted_path,
                self.alice_sign_pub]):
             self.bob_decrypt_btn.config(state='normal')
@@ -1176,55 +725,25 @@ class SecureAudioGUI:
             self.bob_decrypt_btn.config(state='disabled')
     
     def _update_status(self):
-        """Update status bar based on authentication and key state."""
-        # Check authentication state first
-        if not self.alice_logged_in and not self.bob_logged_in:
+        """Update status bar."""
+        if self.alice_ecdh_priv and self.bob_ecdh_pub:
             self.status_label.config(
-                text="🔒 Both Alice and Bob must login to proceed",
-                fg=self.COLORS['warning']
+                text="✅ Keys exchanged - Ready for encryption",
+                fg=self.COLORS['accent_green']
             )
-        elif self.alice_logged_in and not self.bob_logged_in:
+        elif self.alice_ecdh_priv:
             self.status_label.config(
-                text="✅ Alice logged in, waiting for Bob...",
-                fg=self.COLORS['warning']
+                text="⏳ Waiting for Bob to generate keys...",
+                fg='#ffd93d'
             )
-        elif not self.alice_logged_in and self.bob_logged_in:
+        elif self.bob_ecdh_pub:
             self.status_label.config(
-                text="✅ Bob logged in, waiting for Alice...",
-                fg=self.COLORS['warning']
+                text="⏳ Waiting for Alice to generate keys...",
+                fg='#ffd93d'
             )
-        else:
-            # Both logged in - check key state
-            if self.alice_ecdh_priv and self.bob_ecdh_pub:
-                self.status_label.config(
-                    text="✅ Keys exchanged - Ready for encryption",
-                    fg=self.COLORS['accent_green']
-                )
-            elif self.alice_ecdh_priv:
-                self.status_label.config(
-                    text="⏳ Waiting for Bob to generate keys...",
-                    fg='#ffd93d'
-                )
-            elif self.bob_ecdh_pub:
-                self.status_label.config(
-                    text="⏳ Waiting for Alice to generate keys...",
-                    fg='#ffd93d'
-                )
-            else:
-                self.status_label.config(
-                    text="🔐 Authenticated - Generate keys to begin",
-                    fg=self.COLORS['accent_green']
-                )
     
     def _run_demo(self):
         """Run a complete demo with sample file."""
-        # Security check: Verify session is active
-        if not self.alice_session_active or not self.bob_session_active:
-            messagebox.showerror("Security Error", 
-                "Session verification failed. Please re-authenticate.")
-            self._hide_main_interface()
-            return
-        
         # Check if sample file exists
         sample_files = [f for f in os.listdir('.') 
                        if f.endswith(('.mp3', '.wav', '.m4a'))]
